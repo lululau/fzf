@@ -181,6 +181,28 @@ fzf-completion() {
   # Fall back to default completion
   else
     zle ${fzf_default_completion:-expand-or-complete}
+
+    if type "fzf_comp_$cmd" | grep -qv 'shell function'; then
+      eval "zle ${fzf_default_completion:-expand-or-complete}"
+      return
+    fi
+
+    if ! "fzf_comp_$cmd" --- "${tokens[@]}" &> /dev/null; then
+      eval "zle ${fzf_default_completion:-expand-or-complete}"
+      return
+    fi
+
+    if [ ${LBUFFER[-1,-1]} = ' ' ];then
+      prefix=''
+      lbuf=$LBUFFER
+    else
+      prefix=${tokens[-1]}
+      [ -z "${tokens[-1]}" ] && lbuf=$LBUFFER        || lbuf=${LBUFFER:0:-${#tokens[-1]}}
+    fi
+
+    _fzf_list_completion "$prefix" $lbuf '+m' << "EOF"
+    "fzf_comp_$cmd" "${tokens[@]}"
+EOF
   fi
 }
 

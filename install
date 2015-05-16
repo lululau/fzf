@@ -310,6 +310,18 @@ $fzf_completion
 $fzf_key_bindings
 
 EOF
+
+  if [ "$shell" = zsh ]; then
+    echo >> $src
+    echo "export FPATH=\"\$FPATH:$fzf_base/zsh-functions\"" >> $src
+    funcs=autoload
+    for i in "$fzf_base/zsh-functions/"*; do
+      funcs="$funcs $(basename $i)"
+    done
+    if [ "$funcs" != autoload ]; then
+      echo "$funcs" >> $src
+    fi
+  fi
   echo "OK"
 done
 

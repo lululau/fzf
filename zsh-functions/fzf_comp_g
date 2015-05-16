@@ -1,0 +1,14 @@
+if [ "$1" = --- ];then
+  shift; shift;
+  if [ "$1" = 'checkout' -o "$1" = 'co' -o "$1" = 'merge' ]; then
+    return 0
+  else
+    return 1
+  fi
+else
+  shift
+  if [ "$1" = 'checkout' -o "$1" = 'co' -o "$1" = 'merge' ]; then
+    git branch | perl -pe 's#..##'
+  else
+  fi
+fi
