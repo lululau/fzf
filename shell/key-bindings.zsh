@@ -74,5 +74,13 @@ EOF
 }
 zle     -N   fzf-iterm2-widget
 bindkey '\eo' fzf-iterm2-widget
+
+
+fzf-autojump-widget() {
+  LBUFFER="${LBUFFER}$(autojump -s | gsed -n '/^_______/!p; /^_______/q'  | cut -d$'\t' -f2 | fzf | sed "s#^#'#;s#\$#'#")"
+  zle redisplay
+}
+zle     -N   fzf-autojump-widget
+bindkey '\ej' fzf-autojump-widget
 fi
 
