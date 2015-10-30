@@ -65,7 +65,7 @@ zle     -N   fzf-history-widget
 bindkey '^R' fzf-history-widget
 
 fzf-iterm2-widget() {
-  iterm_text=$(echo 'tell app "iTerm" to get text of current session of current terminal' | osascript  | sed -n '/^\s*$/!p' | perl -e 'print reverse <>')
+  iterm_text=$(echo 'tell app "iTerm" to get contents of current session of current tab of current window' | osascript  | sed -n '/^\s*$/!p' | perl -e 'print reverse <>')
   LBUFFER="${LBUFFER}$(cat <<EOF | fzf
 $iterm_text
 EOF
