@@ -152,11 +152,11 @@ fzf-completion() {
 
   # Explicitly allow for empty trigger.
   trigger=${FZF_COMPLETION_TRIGGER-'**'}
-  [ -z "$trigger" -a ${LBUFFER[-1]} = ' ' ] && tokens+=("")
+  [ -z "$trigger" -a "${LBUFFER[-1]}" = ' ' ] && tokens+=("")
 
   tail=${LBUFFER:$(( ${#LBUFFER} - ${#trigger} ))}
   # Kill completion (do not require trigger sequence)
-  if [ $cmd = kill -a ${LBUFFER[-1]} = ' ' ]; then
+  if [ $cmd = kill -a "${LBUFFER[-1]}" = ' ' ]; then
     [ ${FZF_TMUX:-1} -eq 1 ] && fzf="fzf-tmux -d ${FZF_TMUX_HEIGHT:-40%}" || fzf="fzf"
     matches=$(ps -ef | sed 1d | ${=fzf} ${=FZF_COMPLETION_OPTS} -m | awk '{print $2}' | tr '\n' ' ')
     if [ -n "$matches" ]; then
