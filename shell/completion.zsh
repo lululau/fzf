@@ -192,7 +192,7 @@ fzf-completion() {
       return
     fi
 
-    if [ ${LBUFFER[-1,-1]} = ' ' ];then
+    if [ "${LBUFFER[-1,-1]}" = ' ' ];then
       prefix=''
       lbuf=$LBUFFER
     else
@@ -200,7 +200,7 @@ fzf-completion() {
       [ -z "${tokens[-1]}" ] && lbuf=$LBUFFER        || lbuf=${LBUFFER:0:-${#tokens[-1]}}
     fi
 
-    _fzf_list_completion "$prefix" $lbuf '+m' << "EOF"
+    _fzf_list_completion "$prefix" "$lbuf" '+m' << "EOF"
     "fzf_comp_$cmd" "${tokens[@]}"
 EOF
   fi
