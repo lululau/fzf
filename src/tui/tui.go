@@ -1,6 +1,9 @@
 package tui
 
 import (
+	"fmt"
+	"os"
+	"strconv"
 	"time"
 )
 
@@ -35,6 +38,7 @@ const (
 	CtrlY
 	CtrlZ
 	ESC
+	CtrlSpace
 
 	Invalid
 	Resize
@@ -71,7 +75,8 @@ const (
 	F11
 	F12
 
-	AltEnter
+	Change
+
 	AltSpace
 	AltSlash
 	AltBS
@@ -86,7 +91,9 @@ const ( // Reset iota
 	AltD
 	AltE
 	AltF
-	AltZ = AltA + 'z' - 'a'
+	AltZ     = AltA + 'z' - 'a'
+	CtrlAltA = AltZ + 1
+	CtrlAltM = CtrlAltA + 'm' - 'a'
 )
 
 const (
@@ -114,6 +121,43 @@ const (
 	colCyan
 	colWhite
 )
+
+type FillReturn int
+
+const (
+	FillContinue FillReturn = iota
+	FillNextLine
+	FillSuspend
+)
+
+type ColorPair struct {
+	fg Color
+	bg Color
+	id int
+}
+
+func HexToColor(rrggbb string) Color {
+	r, _ := strconv.ParseInt(rrggbb[1:3], 16, 0)
+	g, _ := strconv.ParseInt(rrggbb[3:5], 16, 0)
+	b, _ := strconv.ParseInt(rrggbb[5:7], 16, 0)
+	return Color((1 << 24) + (r << 16) + (g << 8) + b)
+}
+
+func NewColorPair(fg Color, bg Color) ColorPair {
+	return ColorPair{fg, bg, -1}
+}
+
+func (p ColorPair) Fg() Color {
+	return p.fg
+}
+
+func (p ColorPair) Bg() Color {
+	return p.bg
+}
+
+func (p ColorPair) is24() bool {
+	return p.fg.is24() || p.bg.is24()
+}
 
 type ColorTheme struct {
 	Fg           Color
@@ -146,22 +190,90 @@ type MouseEvent struct {
 	Mod    bool
 }
 
-var (
-	_color        bool
-	_prevDownTime time.Time
-	_clickY       []int
-	Default16     *ColorTheme
-	Dark256       *ColorTheme
-	Light256      *ColorTheme
+type BorderStyle int
+
+const (
+	BorderNone BorderStyle = iota
+	BorderAround
+	BorderHorizontal
 )
 
-type Window struct {
-	impl   *WindowImpl
-	Top    int
-	Left   int
-	Width  int
-	Height int
+type Renderer interface {
+	Init()
+	Pause(clear bool)
+	Resume(clear bool)
+	Clear()
+	RefreshWindows(windows []Window)
+	Refresh()
+	Close()
+
+	GetChar() Event
+
+	MaxX() int
+	MaxY() int
+	DoesAutoWrap() bool
+
+	NewWindow(top int, left int, width int, height int, borderStyle BorderStyle) Window
 }
+
+type Window interface {
+	Top() int
+	Left() int
+	Width() int
+	Height() int
+
+	Refresh()
+	FinishFill()
+	Close()
+
+	X() int
+	Y() int
+	Enclose(y int, x int) bool
+
+	Move(y int, x int)
+	MoveAndClear(y int, x int)
+	Print(text string)
+	CPrint(color ColorPair, attr Attr, text string)
+	Fill(text string) FillReturn
+	CFill(fg Color, bg Color, attr Attr, text string) FillReturn
+	Erase()
+}
+
+type FullscreenRenderer struct {
+	theme        *ColorTheme
+	mouse        bool
+	forceBlack   bool
+	prevDownTime time.Time
+	clickY       []int
+}
+
+func NewFullscreenRenderer(theme *ColorTheme, forceBlack bool, mouse bool) Renderer {
+	r := &FullscreenRenderer{
+		theme:        theme,
+		mouse:        mouse,
+		forceBlack:   forceBlack,
+		prevDownTime: time.Unix(0, 0),
+		clickY:       []int{}}
+	return r
+}
+
+var (
+	Default16 *ColorTheme
+	Dark256   *ColorTheme
+	Light256  *ColorTheme
+
+	ColNormal       ColorPair
+	ColPrompt       ColorPair
+	ColMatch        ColorPair
+	ColCurrent      ColorPair
+	ColCurrentMatch ColorPair
+	ColSpinner      ColorPair
+	ColInfo         ColorPair
+	ColCursor       ColorPair
+	ColSelected     ColorPair
+	ColHeader       ColorPair
+	ColBorder       ColorPair
+)
 
 func EmptyTheme() *ColorTheme {
 	return &ColorTheme{
@@ -180,9 +292,12 @@ func EmptyTheme() *ColorTheme {
 		Border:       colUndefined}
 }
 
+func errorExit(message string) {
+	fmt.Fprintln(os.Stderr, message)
+	os.Exit(2)
+}
+
 func init() {
-	_prevDownTime = time.Unix(0, 0)
-	_clickY = []int{}
 	Default16 = &ColorTheme{
 		Fg:           colDefault,
 		Bg:           colDefault,
@@ -227,14 +342,13 @@ func init() {
 		Border:       145}
 }
 
-func InitTheme(theme *ColorTheme, black bool) {
-	_color = theme != nil
-	if !_color {
+func initTheme(theme *ColorTheme, baseTheme *ColorTheme, forceBlack bool) {
+	if theme == nil {
+		initPalette(theme)
 		return
 	}
 
-	baseTheme := DefaultTheme()
-	if black {
+	if forceBlack {
 		theme.Bg = colBlack
 	}
 
@@ -257,4 +371,51 @@ func InitTheme(theme *ColorTheme, black bool) {
 	theme.Selected = o(baseTheme.Selected, theme.Selected)
 	theme.Header = o(baseTheme.Header, theme.Header)
 	theme.Border = o(baseTheme.Border, theme.Border)
+
+	initPalette(theme)
+}
+
+func initPalette(theme *ColorTheme) {
+	idx := 0
+	pair := func(fg, bg Color) ColorPair {
+		idx++
+		return ColorPair{fg, bg, idx}
+	}
+	if theme != nil {
+		ColNormal = pair(theme.Fg, theme.Bg)
+		ColPrompt = pair(theme.Prompt, theme.Bg)
+		ColMatch = pair(theme.Match, theme.Bg)
+		ColCurrent = pair(theme.Current, theme.DarkBg)
+		ColCurrentMatch = pair(theme.CurrentMatch, theme.DarkBg)
+		ColSpinner = pair(theme.Spinner, theme.Bg)
+		ColInfo = pair(theme.Info, theme.Bg)
+		ColCursor = pair(theme.Cursor, theme.DarkBg)
+		ColSelected = pair(theme.Selected, theme.DarkBg)
+		ColHeader = pair(theme.Header, theme.Bg)
+		ColBorder = pair(theme.Border, theme.Bg)
+	} else {
+		ColNormal = pair(colDefault, colDefault)
+		ColPrompt = pair(colDefault, colDefault)
+		ColMatch = pair(colDefault, colDefault)
+		ColCurrent = pair(colDefault, colDefault)
+		ColCurrentMatch = pair(colDefault, colDefault)
+		ColSpinner = pair(colDefault, colDefault)
+		ColInfo = pair(colDefault, colDefault)
+		ColCursor = pair(colDefault, colDefault)
+		ColSelected = pair(colDefault, colDefault)
+		ColHeader = pair(colDefault, colDefault)
+		ColBorder = pair(colDefault, colDefault)
+	}
+}
+
+func attrFor(color ColorPair, attr Attr) Attr {
+	switch color {
+	case ColCurrent:
+		return attr | Reverse
+	case ColMatch:
+		return attr | Underline
+	case ColCurrentMatch:
+		return attr | Underline | Reverse
+	}
+	return attr
 }

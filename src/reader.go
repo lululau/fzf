@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"io"
 	"os"
+	"sync/atomic"
+	"time"
 
 	"github.com/junegunn/fzf/src/util"
 )
@@ -13,20 +15,56 @@ type Reader struct {
 	pusher   func([]byte) bool
 	eventBox *util.EventBox
 	delimNil bool
+	event    int32
+}
+
+// NewReader returns new Reader object
+func NewReader(pusher func([]byte) bool, eventBox *util.EventBox, delimNil bool) *Reader {
+	return &Reader{pusher, eventBox, delimNil, int32(EvtReady)}
+}
+
+func (r *Reader) startEventPoller() {
+	go func() {
+		ptr := &r.event
+		pollInterval := readerPollIntervalMin
+		for {
+			if atomic.CompareAndSwapInt32(ptr, int32(EvtReadNew), int32(EvtReady)) {
+				r.eventBox.Set(EvtReadNew, true)
+				pollInterval = readerPollIntervalMin
+			} else if atomic.LoadInt32(ptr) == int32(EvtReadFin) {
+				return
+			} else {
+				pollInterval += readerPollIntervalStep
+				if pollInterval > readerPollIntervalMax {
+					pollInterval = readerPollIntervalMax
+				}
+			}
+			time.Sleep(pollInterval)
+		}
+	}()
+}
+
+func (r *Reader) fin(success bool) {
+	atomic.StoreInt32(&r.event, int32(EvtReadFin))
+	r.eventBox.Set(EvtReadFin, success)
 }
 
 // ReadSource reads data from the default command or from standard input
 func (r *Reader) ReadSource() {
+	r.startEventPoller()
+	var success bool
 	if util.IsTty() {
 		cmd := os.Getenv("FZF_DEFAULT_COMMAND")
 		if len(cmd) == 0 {
-			cmd = defaultCommand
+			// The default command for *nix requires bash
+			success = r.readFromCommand("bash", defaultCommand)
+		} else {
+			success = r.readFromCommand("sh", cmd)
 		}
-		r.readFromCommand(cmd)
 	} else {
-		r.readFromStdin()
+		success = r.readFromStdin()
 	}
-	r.eventBox.Set(EvtReadFin, nil)
+	r.fin(success)
 }
 
 func (r *Reader) feed(src io.Reader) {
@@ -40,7 +78,7 @@ func (r *Reader) feed(src io.Reader) {
 		// end in delim.
 		bytea, err := reader.ReadBytes(delim)
 		byteaLen := len(bytea)
-		if len(bytea) > 0 {
+		if byteaLen > 0 {
 			if err == nil {
 				// get rid of carriage return if under Windows:
 				if util.IsWindows() && byteaLen >= 2 && bytea[byteaLen-2] == byte('\r') {
@@ -50,7 +88,7 @@ func (r *Reader) feed(src io.Reader) {
 				}
 			}
 			if r.pusher(bytea) {
-				r.eventBox.Set(EvtReadNew, nil)
+				atomic.StoreInt32(&r.event, int32(EvtReadNew))
 			}
 		}
 		if err != nil {
@@ -59,20 +97,21 @@ func (r *Reader) feed(src io.Reader) {
 	}
 }
 
-func (r *Reader) readFromStdin() {
+func (r *Reader) readFromStdin() bool {
 	r.feed(os.Stdin)
+	return true
 }
 
-func (r *Reader) readFromCommand(cmd string) {
-	listCommand := util.ExecCommand(cmd)
+func (r *Reader) readFromCommand(shell string, cmd string) bool {
+	listCommand := util.ExecCommandWith(shell, cmd)
 	out, err := listCommand.StdoutPipe()
 	if err != nil {
-		return
+		return false
 	}
 	err = listCommand.Start()
 	if err != nil {
-		return
+		return false
 	}
-	defer listCommand.Wait()
 	r.feed(out)
+	return listCommand.Wait() == nil
 }

@@ -78,9 +78,11 @@ Scoring criteria
 */
 
 import (
+	"bytes"
 	"fmt"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/junegunn/fzf/src/util"
 )
@@ -156,27 +158,17 @@ func posArray(withPos bool, len int) *[]int {
 	return nil
 }
 
-func alloc16(offset int, slab *util.Slab, size int, clear bool) (int, []int16) {
+func alloc16(offset int, slab *util.Slab, size int) (int, []int16) {
 	if slab != nil && cap(slab.I16) > offset+size {
 		slice := slab.I16[offset : offset+size]
-		if clear {
-			for idx := range slice {
-				slice[idx] = 0
-			}
-		}
 		return offset + size, slice
 	}
 	return offset, make([]int16, size)
 }
 
-func alloc32(offset int, slab *util.Slab, size int, clear bool) (int, []int32) {
+func alloc32(offset int, slab *util.Slab, size int) (int, []int32) {
 	if slab != nil && cap(slab.I32) > offset+size {
 		slice := slab.I32[offset : offset+size]
-		if clear {
-			for idx := range slice {
-				slice[idx] = 0
-			}
-		}
 		return offset + size, slice
 	}
 	return offset, make([]int32, size)
@@ -227,183 +219,311 @@ func bonusFor(prevClass charClass, class charClass) int16 {
 	return 0
 }
 
-func bonusAt(input util.Chars, idx int) int16 {
+func bonusAt(input *util.Chars, idx int) int16 {
 	if idx == 0 {
 		return bonusBoundary
 	}
 	return bonusFor(charClassOf(input.Get(idx-1)), charClassOf(input.Get(idx)))
 }
 
-type Algo func(caseSensitive bool, forward bool, input util.Chars, pattern []rune, withPos bool, slab *util.Slab) (Result, *[]int)
+func normalizeRune(r rune) rune {
+	if r < 0x00C0 || r > 0x2184 {
+		return r
+	}
 
-func FuzzyMatchV2(caseSensitive bool, forward bool, input util.Chars, pattern []rune, withPos bool, slab *util.Slab) (Result, *[]int) {
+	n := normalized[r]
+	if n > 0 {
+		return n
+	}
+	return r
+}
+
+// Algo functions make two assumptions
+// 1. "pattern" is given in lowercase if "caseSensitive" is false
+// 2. "pattern" is already normalized if "normalize" is true
+type Algo func(caseSensitive bool, normalize bool, forward bool, input *util.Chars, pattern []rune, withPos bool, slab *util.Slab) (Result, *[]int)
+
+func trySkip(input *util.Chars, caseSensitive bool, b byte, from int) int {
+	byteArray := input.Bytes()[from:]
+	idx := bytes.IndexByte(byteArray, b)
+	if idx == 0 {
+		// Can't skip any further
+		return from
+	}
+	// We may need to search for the uppercase letter again. We don't have to
+	// consider normalization as we can be sure that this is an ASCII string.
+	if !caseSensitive && b >= 'a' && b <= 'z' {
+		if idx > 0 {
+			byteArray = byteArray[:idx]
+		}
+		uidx := bytes.IndexByte(byteArray, b-32)
+		if uidx >= 0 {
+			idx = uidx
+		}
+	}
+	if idx < 0 {
+		return -1
+	}
+	return from + idx
+}
+
+func isAscii(runes []rune) bool {
+	for _, r := range runes {
+		if r >= utf8.RuneSelf {
+			return false
+		}
+	}
+	return true
+}
+
+func asciiFuzzyIndex(input *util.Chars, pattern []rune, caseSensitive bool) int {
+	// Can't determine
+	if !input.IsBytes() {
+		return 0
+	}
+
+	// Not possible
+	if !isAscii(pattern) {
+		return -1
+	}
+
+	firstIdx, idx := 0, 0
+	for pidx := 0; pidx < len(pattern); pidx++ {
+		idx = trySkip(input, caseSensitive, byte(pattern[pidx]), idx)
+		if idx < 0 {
+			return -1
+		}
+		if pidx == 0 && idx > 0 {
+			// Step back to find the right bonus point
+			firstIdx = idx - 1
+		}
+		idx++
+	}
+	return firstIdx
+}
+
+func debugV2(T []rune, pattern []rune, F []int32, lastIdx int, H []int16, C []int16) {
+	width := lastIdx - int(F[0]) + 1
+
+	for i, f := range F {
+		I := i * width
+		if i == 0 {
+			fmt.Print("  ")
+			for j := int(f); j <= lastIdx; j++ {
+				fmt.Printf(" " + string(T[j]) + " ")
+			}
+			fmt.Println()
+		}
+		fmt.Print(string(pattern[i]) + " ")
+		for idx := int(F[0]); idx < int(f); idx++ {
+			fmt.Print(" 0 ")
+		}
+		for idx := int(f); idx <= lastIdx; idx++ {
+			fmt.Printf("%2d ", H[i*width+idx-int(F[0])])
+		}
+		fmt.Println()
+
+		fmt.Print("  ")
+		for idx, p := range C[I : I+width] {
+			if idx+int(F[0]) < int(F[i]) {
+				p = 0
+			}
+			if p > 0 {
+				fmt.Printf("%2d ", p)
+			} else {
+				fmt.Print("   ")
+			}
+		}
+		fmt.Println()
+	}
+}
+
+func FuzzyMatchV2(caseSensitive bool, normalize bool, forward bool, input *util.Chars, pattern []rune, withPos bool, slab *util.Slab) (Result, *[]int) {
 	// Assume that pattern is given in lowercase if case-insensitive.
 	// First check if there's a match and calculate bonus for each position.
 	// If the input string is too long, consider finding the matching chars in
 	// this phase as well (non-optimal alignment).
-	N := input.Length()
 	M := len(pattern)
-	switch M {
-	case 0:
+	if M == 0 {
 		return Result{0, 0, 0}, posArray(withPos, M)
-	case 1:
-		return ExactMatchNaive(caseSensitive, forward, input, pattern[0:1], withPos, slab)
 	}
+	N := input.Length()
 
 	// Since O(nm) algorithm can be prohibitively expensive for large input,
 	// we fall back to the greedy algorithm.
 	if slab != nil && N*M > cap(slab.I16) {
-		return FuzzyMatchV1(caseSensitive, forward, input, pattern, withPos, slab)
+		return FuzzyMatchV1(caseSensitive, normalize, forward, input, pattern, withPos, slab)
+	}
+
+	// Phase 1. Optimized search for ASCII string
+	idx := asciiFuzzyIndex(input, pattern, caseSensitive)
+	if idx < 0 {
+		return Result{-1, -1, 0}, nil
 	}
 
 	// Reuse pre-allocated integer slice to avoid unnecessary sweeping of garbages
 	offset16 := 0
 	offset32 := 0
+	offset16, H0 := alloc16(offset16, slab, N)
+	offset16, C0 := alloc16(offset16, slab, N)
 	// Bonus point for each position
-	offset16, B := alloc16(offset16, slab, N, false)
+	offset16, B := alloc16(offset16, slab, N)
 	// The first occurrence of each character in the pattern
-	offset32, F := alloc32(offset32, slab, M, false)
+	offset32, F := alloc32(offset32, slab, M)
 	// Rune array
-	offset32, T := alloc32(offset32, slab, N, false)
+	offset32, T := alloc32(offset32, slab, N)
+	input.CopyRunes(T)
 
-	// Phase 1. Check if there's a match and calculate bonus for each point
-	pidx, lastIdx, prevClass := 0, 0, charNonWord
-	for idx := 0; idx < N; idx++ {
-		char := input.Get(idx)
+	// Phase 2. Calculate bonus for each point
+	maxScore, maxScorePos := int16(0), 0
+	pidx, lastIdx := 0, 0
+	pchar0, pchar, prevH0, prevClass, inGap := pattern[0], pattern[0], int16(0), charNonWord, false
+	Tsub := T[idx:]
+	H0sub, C0sub, Bsub := H0[idx:][:len(Tsub)], C0[idx:][:len(Tsub)], B[idx:][:len(Tsub)]
+	for off, char := range Tsub {
 		var class charClass
 		if char <= unicode.MaxASCII {
 			class = charClassOfAscii(char)
+			if !caseSensitive && class == charUpper {
+				char += 32
+			}
 		} else {
 			class = charClassOfNonAscii(char)
-		}
-
-		if !caseSensitive && class == charUpper {
-			if char <= unicode.MaxASCII {
-				char += 32
-			} else {
+			if !caseSensitive && class == charUpper {
 				char = unicode.To(unicode.LowerCase, char)
 			}
+			if normalize {
+				char = normalizeRune(char)
+			}
 		}
 
-		T[idx] = char
-		B[idx] = bonusFor(prevClass, class)
+		Tsub[off] = char
+		bonus := bonusFor(prevClass, class)
+		Bsub[off] = bonus
 		prevClass = class
 
-		if pidx < M {
-			if char == pattern[pidx] {
-				lastIdx = idx
-				F[pidx] = int32(idx)
+		if char == pchar {
+			if pidx < M {
+				F[pidx] = int32(idx + off)
 				pidx++
+				pchar = pattern[util.Min(pidx, M-1)]
 			}
-		} else {
-			if char == pattern[M-1] {
-				lastIdx = idx
-			}
+			lastIdx = idx + off
 		}
+
+		if char == pchar0 {
+			score := scoreMatch + bonus*bonusFirstCharMultiplier
+			H0sub[off] = score
+			C0sub[off] = 1
+			if M == 1 && (forward && score > maxScore || !forward && score >= maxScore) {
+				maxScore, maxScorePos = score, idx+off
+				if forward && bonus == bonusBoundary {
+					break
+				}
+			}
+			inGap = false
+		} else {
+			if inGap {
+				H0sub[off] = util.Max16(prevH0+scoreGapExtention, 0)
+			} else {
+				H0sub[off] = util.Max16(prevH0+scoreGapStart, 0)
+			}
+			C0sub[off] = 0
+			inGap = true
+		}
+		prevH0 = H0sub[off]
 	}
 	if pidx != M {
 		return Result{-1, -1, 0}, nil
 	}
+	if M == 1 {
+		result := Result{maxScorePos, maxScorePos + 1, int(maxScore)}
+		if !withPos {
+			return result, nil
+		}
+		pos := []int{maxScorePos}
+		return result, &pos
+	}
 
-	// Phase 2. Fill in score matrix (H)
+	// Phase 3. Fill in score matrix (H)
 	// Unlike the original algorithm, we do not allow omission.
-	width := lastIdx - int(F[0]) + 1
-	offset16, H := alloc16(offset16, slab, width*M, false)
+	f0 := int(F[0])
+	width := lastIdx - f0 + 1
+	offset16, H := alloc16(offset16, slab, width*M)
+	copy(H, H0[f0:lastIdx+1])
 
 	// Possible length of consecutive chunk at each position.
-	offset16, C := alloc16(offset16, slab, width*M, false)
+	offset16, C := alloc16(offset16, slab, width*M)
+	copy(C, C0[f0:lastIdx+1])
 
-	maxScore, maxScorePos := int16(0), 0
-	for i := 0; i < M; i++ {
-		I := i * width
+	Fsub := F[1:]
+	Psub := pattern[1:][:len(Fsub)]
+	for off, f := range Fsub {
+		f := int(f)
+		pchar := Psub[off]
+		pidx := off + 1
+		row := pidx * width
 		inGap := false
-		for j := int(F[i]); j <= lastIdx; j++ {
-			j0 := j - int(F[0])
+		Tsub := T[f : lastIdx+1]
+		Bsub := B[f:][:len(Tsub)]
+		Csub := C[row+f-f0:][:len(Tsub)]
+		Cdiag := C[row+f-f0-1-width:][:len(Tsub)]
+		Hsub := H[row+f-f0:][:len(Tsub)]
+		Hdiag := H[row+f-f0-1-width:][:len(Tsub)]
+		Hleft := H[row+f-f0-1:][:len(Tsub)]
+		Hleft[0] = 0
+		for off, char := range Tsub {
+			col := off + f
 			var s1, s2, consecutive int16
 
-			if j > int(F[i]) {
-				if inGap {
-					s2 = H[I+j0-1] + scoreGapExtention
-				} else {
-					s2 = H[I+j0-1] + scoreGapStart
-				}
+			if inGap {
+				s2 = Hleft[off] + scoreGapExtention
+			} else {
+				s2 = Hleft[off] + scoreGapStart
 			}
 
-			if pattern[i] == T[j] {
-				var diag int16
-				if i > 0 && j0 > 0 {
-					diag = H[I-width+j0-1]
-				}
-				s1 = diag + scoreMatch
-				b := B[j]
-				if i > 0 {
-					// j > 0 if i > 0
-					consecutive = C[I-width+j0-1] + 1
-					// Break consecutive chunk
-					if b == bonusBoundary {
-						consecutive = 1
-					} else if consecutive > 1 {
-						b = util.Max16(b, util.Max16(bonusConsecutive, B[j-int(consecutive)+1]))
-					}
-				} else {
+			if pchar == char {
+				s1 = Hdiag[off] + scoreMatch
+				b := Bsub[off]
+				consecutive = Cdiag[off] + 1
+				// Break consecutive chunk
+				if b == bonusBoundary {
 					consecutive = 1
-					b *= bonusFirstCharMultiplier
+				} else if consecutive > 1 {
+					b = util.Max16(b, util.Max16(bonusConsecutive, B[col-int(consecutive)+1]))
 				}
 				if s1+b < s2 {
-					s1 += B[j]
+					s1 += Bsub[off]
 					consecutive = 0
 				} else {
 					s1 += b
 				}
 			}
-			C[I+j0] = consecutive
+			Csub[off] = consecutive
 
 			inGap = s1 < s2
 			score := util.Max16(util.Max16(s1, s2), 0)
-			if i == M-1 && (forward && score > maxScore || !forward && score >= maxScore) {
-				maxScore, maxScorePos = score, j
+			if pidx == M-1 && (forward && score > maxScore || !forward && score >= maxScore) {
+				maxScore, maxScorePos = score, col
 			}
-			H[I+j0] = score
-		}
-
-		if DEBUG {
-			if i == 0 {
-				fmt.Print("  ")
-				for j := int(F[i]); j <= lastIdx; j++ {
-					fmt.Printf(" " + string(input.Get(j)) + " ")
-				}
-				fmt.Println()
-			}
-			fmt.Print(string(pattern[i]) + " ")
-			for idx := int(F[0]); idx < int(F[i]); idx++ {
-				fmt.Print(" 0 ")
-			}
-			for idx := int(F[i]); idx <= lastIdx; idx++ {
-				fmt.Printf("%2d ", H[i*width+idx-int(F[0])])
-			}
-			fmt.Println()
-
-			fmt.Print("  ")
-			for idx, p := range C[I : I+width] {
-				if idx+int(F[0]) < int(F[i]) {
-					p = 0
-				}
-				fmt.Printf("%2d ", p)
-			}
-			fmt.Println()
+			Hsub[off] = score
 		}
 	}
 
-	// Phase 3. (Optional) Backtrace to find character positions
+	if DEBUG {
+		debugV2(T, pattern, F, lastIdx, H, C)
+	}
+
+	// Phase 4. (Optional) Backtrace to find character positions
 	pos := posArray(withPos, M)
-	j := int(F[0])
+	j := f0
 	if withPos {
 		i := M - 1
 		j = maxScorePos
 		preferMatch := true
 		for {
 			I := i * width
-			j0 := j - int(F[0])
+			j0 := j - f0
 			s := H[I+j0]
 
 			var s1, s2 int16
@@ -432,7 +552,7 @@ func FuzzyMatchV2(caseSensitive bool, forward bool, input util.Chars, pattern []
 }
 
 // Implement the same sorting criteria as V2
-func calculateScore(caseSensitive bool, text util.Chars, pattern []rune, sidx int, eidx int, withPos bool) (int, *[]int) {
+func calculateScore(caseSensitive bool, normalize bool, text *util.Chars, pattern []rune, sidx int, eidx int, withPos bool) (int, *[]int) {
 	pidx, score, inGap, consecutive, firstBonus := 0, 0, false, 0, int16(0)
 	pos := posArray(withPos, len(pattern))
 	prevClass := charNonWord
@@ -448,6 +568,10 @@ func calculateScore(caseSensitive bool, text util.Chars, pattern []rune, sidx in
 			} else if char > unicode.MaxASCII {
 				char = unicode.To(unicode.LowerCase, char)
 			}
+		}
+		// pattern is already normalized
+		if normalize {
+			char = normalizeRune(char)
 		}
 		if char == pattern[pidx] {
 			if withPos {
@@ -488,9 +612,12 @@ func calculateScore(caseSensitive bool, text util.Chars, pattern []rune, sidx in
 }
 
 // FuzzyMatchV1 performs fuzzy-match
-func FuzzyMatchV1(caseSensitive bool, forward bool, text util.Chars, pattern []rune, withPos bool, slab *util.Slab) (Result, *[]int) {
+func FuzzyMatchV1(caseSensitive bool, normalize bool, forward bool, text *util.Chars, pattern []rune, withPos bool, slab *util.Slab) (Result, *[]int) {
 	if len(pattern) == 0 {
 		return Result{0, 0, 0}, nil
+	}
+	if asciiFuzzyIndex(text, pattern, caseSensitive) < 0 {
+		return Result{-1, -1, 0}, nil
 	}
 
 	pidx := 0
@@ -513,6 +640,9 @@ func FuzzyMatchV1(caseSensitive bool, forward bool, text util.Chars, pattern []r
 			} else if char > unicode.MaxASCII {
 				char = unicode.To(unicode.LowerCase, char)
 			}
+		}
+		if normalize {
+			char = normalizeRune(char)
 		}
 		pchar := pattern[indexAt(pidx, lenPattern, forward)]
 		if char == pchar {
@@ -553,7 +683,7 @@ func FuzzyMatchV1(caseSensitive bool, forward bool, text util.Chars, pattern []r
 			sidx, eidx = lenRunes-eidx, lenRunes-sidx
 		}
 
-		score, pos := calculateScore(caseSensitive, text, pattern, sidx, eidx, withPos)
+		score, pos := calculateScore(caseSensitive, normalize, text, pattern, sidx, eidx, withPos)
 		return Result{sidx, eidx, score}, pos
 	}
 	return Result{-1, -1, 0}, nil
@@ -568,7 +698,7 @@ func FuzzyMatchV1(caseSensitive bool, forward bool, text util.Chars, pattern []r
 // bonus point, instead of stopping immediately after finding the first match.
 // The solution is much cheaper since there is only one possible alignment of
 // the pattern.
-func ExactMatchNaive(caseSensitive bool, forward bool, text util.Chars, pattern []rune, withPos bool, slab *util.Slab) (Result, *[]int) {
+func ExactMatchNaive(caseSensitive bool, normalize bool, forward bool, text *util.Chars, pattern []rune, withPos bool, slab *util.Slab) (Result, *[]int) {
 	if len(pattern) == 0 {
 		return Result{0, 0, 0}, nil
 	}
@@ -577,6 +707,10 @@ func ExactMatchNaive(caseSensitive bool, forward bool, text util.Chars, pattern 
 	lenPattern := len(pattern)
 
 	if lenRunes < lenPattern {
+		return Result{-1, -1, 0}, nil
+	}
+
+	if asciiFuzzyIndex(text, pattern, caseSensitive) < 0 {
 		return Result{-1, -1, 0}, nil
 	}
 
@@ -592,6 +726,9 @@ func ExactMatchNaive(caseSensitive bool, forward bool, text util.Chars, pattern 
 			} else if char > unicode.MaxASCII {
 				char = unicode.To(unicode.LowerCase, char)
 			}
+		}
+		if normalize {
+			char = normalizeRune(char)
 		}
 		pidx_ := indexAt(pidx, lenPattern, forward)
 		pchar := pattern[pidx_]
@@ -624,14 +761,14 @@ func ExactMatchNaive(caseSensitive bool, forward bool, text util.Chars, pattern 
 			sidx = lenRunes - (bestPos + 1)
 			eidx = lenRunes - (bestPos - lenPattern + 1)
 		}
-		score, _ := calculateScore(caseSensitive, text, pattern, sidx, eidx, false)
+		score, _ := calculateScore(caseSensitive, normalize, text, pattern, sidx, eidx, false)
 		return Result{sidx, eidx, score}, nil
 	}
 	return Result{-1, -1, 0}, nil
 }
 
 // PrefixMatch performs prefix-match
-func PrefixMatch(caseSensitive bool, forward bool, text util.Chars, pattern []rune, withPos bool, slab *util.Slab) (Result, *[]int) {
+func PrefixMatch(caseSensitive bool, normalize bool, forward bool, text *util.Chars, pattern []rune, withPos bool, slab *util.Slab) (Result, *[]int) {
 	if len(pattern) == 0 {
 		return Result{0, 0, 0}, nil
 	}
@@ -645,17 +782,20 @@ func PrefixMatch(caseSensitive bool, forward bool, text util.Chars, pattern []ru
 		if !caseSensitive {
 			char = unicode.ToLower(char)
 		}
+		if normalize {
+			char = normalizeRune(char)
+		}
 		if char != r {
 			return Result{-1, -1, 0}, nil
 		}
 	}
 	lenPattern := len(pattern)
-	score, _ := calculateScore(caseSensitive, text, pattern, 0, lenPattern, false)
+	score, _ := calculateScore(caseSensitive, normalize, text, pattern, 0, lenPattern, false)
 	return Result{0, lenPattern, score}, nil
 }
 
 // SuffixMatch performs suffix-match
-func SuffixMatch(caseSensitive bool, forward bool, text util.Chars, pattern []rune, withPos bool, slab *util.Slab) (Result, *[]int) {
+func SuffixMatch(caseSensitive bool, normalize bool, forward bool, text *util.Chars, pattern []rune, withPos bool, slab *util.Slab) (Result, *[]int) {
 	lenRunes := text.Length()
 	trimmedLen := lenRunes - text.TrailingWhitespaces()
 	if len(pattern) == 0 {
@@ -671,6 +811,9 @@ func SuffixMatch(caseSensitive bool, forward bool, text util.Chars, pattern []ru
 		if !caseSensitive {
 			char = unicode.ToLower(char)
 		}
+		if normalize {
+			char = normalizeRune(char)
+		}
 		if char != r {
 			return Result{-1, -1, 0}, nil
 		}
@@ -678,21 +821,37 @@ func SuffixMatch(caseSensitive bool, forward bool, text util.Chars, pattern []ru
 	lenPattern := len(pattern)
 	sidx := trimmedLen - lenPattern
 	eidx := trimmedLen
-	score, _ := calculateScore(caseSensitive, text, pattern, sidx, eidx, false)
+	score, _ := calculateScore(caseSensitive, normalize, text, pattern, sidx, eidx, false)
 	return Result{sidx, eidx, score}, nil
 }
 
 // EqualMatch performs equal-match
-func EqualMatch(caseSensitive bool, forward bool, text util.Chars, pattern []rune, withPos bool, slab *util.Slab) (Result, *[]int) {
+func EqualMatch(caseSensitive bool, normalize bool, forward bool, text *util.Chars, pattern []rune, withPos bool, slab *util.Slab) (Result, *[]int) {
 	lenPattern := len(pattern)
 	if text.Length() != lenPattern {
 		return Result{-1, -1, 0}, nil
 	}
-	runesStr := text.ToString()
-	if !caseSensitive {
-		runesStr = strings.ToLower(runesStr)
+	match := true
+	if normalize {
+		runes := text.ToRunes()
+		for idx, pchar := range pattern {
+			char := runes[idx]
+			if !caseSensitive {
+				char = unicode.To(unicode.LowerCase, char)
+			}
+			if normalizeRune(pchar) != normalizeRune(char) {
+				match = false
+				break
+			}
+		}
+	} else {
+		runesStr := text.ToString()
+		if !caseSensitive {
+			runesStr = strings.ToLower(runesStr)
+		}
+		match = runesStr == string(pattern)
 	}
-	if runesStr == string(pattern) {
+	if match {
 		return Result{0, lenPattern, (scoreMatch+bonusBoundary)*lenPattern +
 			(bonusFirstCharMultiplier-1)*bonusBoundary}, nil
 	}

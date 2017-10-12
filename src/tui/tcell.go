@@ -3,45 +3,75 @@
 package tui
 
 import (
+	"os"
 	"time"
 	"unicode/utf8"
 
-	"fmt"
-	"os"
-
 	"runtime"
 
-	// https://github.com/gdamore/tcell/pull/135
-	"github.com/junegunn/tcell"
-	"github.com/junegunn/tcell/encoding"
+	"github.com/gdamore/tcell"
+	"github.com/gdamore/tcell/encoding"
 
-	"github.com/junegunn/go-runewidth"
+	"github.com/mattn/go-runewidth"
 )
 
-type ColorPair [2]Color
-
-func (p ColorPair) fg() Color {
-	return p[0]
-}
-
-func (p ColorPair) bg() Color {
-	return p[1]
+func HasFullscreenRenderer() bool {
+	return true
 }
 
 func (p ColorPair) style() tcell.Style {
 	style := tcell.StyleDefault
-	return style.Foreground(tcell.Color(p.fg())).Background(tcell.Color(p.bg()))
+	return style.Foreground(tcell.Color(p.Fg())).Background(tcell.Color(p.Bg()))
 }
 
 type Attr tcell.Style
 
-type WindowTcell struct {
-	LastX      int
-	LastY      int
-	MoveCursor bool
-	Border     bool
+type TcellWindow struct {
+	color       bool
+	top         int
+	left        int
+	width       int
+	height      int
+	lastX       int
+	lastY       int
+	moveCursor  bool
+	borderStyle BorderStyle
 }
-type WindowImpl WindowTcell
+
+func (w *TcellWindow) Top() int {
+	return w.top
+}
+
+func (w *TcellWindow) Left() int {
+	return w.left
+}
+
+func (w *TcellWindow) Width() int {
+	return w.width
+}
+
+func (w *TcellWindow) Height() int {
+	return w.height
+}
+
+func (w *TcellWindow) Refresh() {
+	if w.moveCursor {
+		_screen.ShowCursor(w.left+w.lastX, w.top+w.lastY)
+		w.moveCursor = false
+	}
+	w.lastX = 0
+	w.lastY = 0
+	switch w.borderStyle {
+	case BorderAround:
+		w.drawBorder(true)
+	case BorderHorizontal:
+		w.drawBorder(false)
+	}
+}
+
+func (w *TcellWindow) FinishFill() {
+	// NO-OP
+}
 
 const (
 	Bold      Attr = Attr(tcell.AttrBold)
@@ -56,31 +86,11 @@ const (
 	AttrRegular Attr = 0
 )
 
-var (
-	ColDefault      = ColorPair{colDefault, colDefault}
-	ColNormal       ColorPair
-	ColPrompt       ColorPair
-	ColMatch        ColorPair
-	ColCurrent      ColorPair
-	ColCurrentMatch ColorPair
-	ColSpinner      ColorPair
-	ColInfo         ColorPair
-	ColCursor       ColorPair
-	ColSelected     ColorPair
-	ColHeader       ColorPair
-	ColBorder       ColorPair
-	ColUser         ColorPair
-)
-
-func DefaultTheme() *ColorTheme {
+func (r *FullscreenRenderer) defaultTheme() *ColorTheme {
 	if _screen.Colors() >= 256 {
 		return Dark256
 	}
 	return Default16
-}
-
-func PairFor(fg Color, bg Color) ColorPair {
-	return [2]Color{fg, bg}
 }
 
 var (
@@ -112,20 +122,17 @@ func (a Attr) Merge(b Attr) Attr {
 
 var (
 	_screen tcell.Screen
-	_mouse  bool
 )
 
-func initScreen() {
+func (r *FullscreenRenderer) initScreen() {
 	s, e := tcell.NewScreen()
 	if e != nil {
-		fmt.Fprintf(os.Stderr, "%v\n", e)
-		os.Exit(2)
+		errorExit(e.Error())
 	}
 	if e = s.Init(); e != nil {
-		fmt.Fprintf(os.Stderr, "%v\n", e)
-		os.Exit(2)
+		errorExit(e.Error())
 	}
-	if _mouse {
+	if r.mouse {
 		s.EnableMouse()
 	} else {
 		s.DisableMouse()
@@ -133,63 +140,48 @@ func initScreen() {
 	_screen = s
 }
 
-func Init(theme *ColorTheme, black bool, mouse bool) {
+func (r *FullscreenRenderer) Init() {
+	if os.Getenv("TERM") == "cygwin" {
+		os.Setenv("TERM", "")
+	}
 	encoding.Register()
 
-	_mouse = mouse
-	initScreen()
-
-	_color = theme != nil
-	if _color {
-		InitTheme(theme, black)
-	} else {
-		theme = DefaultTheme()
-	}
-	ColNormal = ColorPair{theme.Fg, theme.Bg}
-	ColPrompt = ColorPair{theme.Prompt, theme.Bg}
-	ColMatch = ColorPair{theme.Match, theme.Bg}
-	ColCurrent = ColorPair{theme.Current, theme.DarkBg}
-	ColCurrentMatch = ColorPair{theme.CurrentMatch, theme.DarkBg}
-	ColSpinner = ColorPair{theme.Spinner, theme.Bg}
-	ColInfo = ColorPair{theme.Info, theme.Bg}
-	ColCursor = ColorPair{theme.Cursor, theme.DarkBg}
-	ColSelected = ColorPair{theme.Selected, theme.DarkBg}
-	ColHeader = ColorPair{theme.Header, theme.Bg}
-	ColBorder = ColorPair{theme.Border, theme.Bg}
+	r.initScreen()
+	initTheme(r.theme, r.defaultTheme(), r.forceBlack)
 }
 
-func MaxX() int {
+func (r *FullscreenRenderer) MaxX() int {
 	ncols, _ := _screen.Size()
 	return int(ncols)
 }
 
-func MaxY() int {
+func (r *FullscreenRenderer) MaxY() int {
 	_, nlines := _screen.Size()
 	return int(nlines)
 }
 
-func (w *Window) win() *WindowTcell {
-	return (*WindowTcell)(w.impl)
+func (w *TcellWindow) X() int {
+	return w.lastX
 }
 
-func (w *Window) X() int {
-	return w.impl.LastX
+func (w *TcellWindow) Y() int {
+	return w.lastY
 }
 
-func DoesAutoWrap() bool {
+func (r *FullscreenRenderer) DoesAutoWrap() bool {
 	return false
 }
 
-func Clear() {
+func (r *FullscreenRenderer) Clear() {
 	_screen.Sync()
 	_screen.Clear()
 }
 
-func Refresh() {
+func (r *FullscreenRenderer) Refresh() {
 	// noop
 }
 
-func GetChar() Event {
+func (r *FullscreenRenderer) GetChar() Event {
 	ev := _screen.PollEvent()
 	switch ev := ev.(type) {
 	case *tcell.EventResize:
@@ -213,15 +205,15 @@ func GetChar() Event {
 			double := false
 			if down {
 				now := time.Now()
-				if now.Sub(_prevDownTime) < doubleClickDuration {
-					_clickY = append(_clickY, x)
+				if now.Sub(r.prevDownTime) < doubleClickDuration {
+					r.clickY = append(r.clickY, x)
 				} else {
-					_clickY = []int{x}
-					_prevDownTime = now
+					r.clickY = []int{x}
+					r.prevDownTime = now
 				}
 			} else {
-				if len(_clickY) > 1 && _clickY[0] == _clickY[1] &&
-					time.Now().Sub(_prevDownTime) < doubleClickDuration {
+				if len(r.clickY) > 1 && r.clickY[0] == r.clickY[1] &&
+					time.Now().Sub(r.prevDownTime) < doubleClickDuration {
 					double = true
 				}
 			}
@@ -232,59 +224,68 @@ func GetChar() Event {
 		// process keyboard:
 	case *tcell.EventKey:
 		alt := (ev.Modifiers() & tcell.ModAlt) > 0
+		keyfn := func(r rune) int {
+			if alt {
+				return CtrlAltA - 'a' + int(r)
+			}
+			return CtrlA - 'a' + int(r)
+		}
 		switch ev.Key() {
 		case tcell.KeyCtrlA:
-			return Event{CtrlA, 0, nil}
+			return Event{keyfn('a'), 0, nil}
 		case tcell.KeyCtrlB:
-			return Event{CtrlB, 0, nil}
+			return Event{keyfn('b'), 0, nil}
 		case tcell.KeyCtrlC:
-			return Event{CtrlC, 0, nil}
+			return Event{keyfn('c'), 0, nil}
 		case tcell.KeyCtrlD:
-			return Event{CtrlD, 0, nil}
+			return Event{keyfn('d'), 0, nil}
 		case tcell.KeyCtrlE:
-			return Event{CtrlE, 0, nil}
+			return Event{keyfn('e'), 0, nil}
 		case tcell.KeyCtrlF:
-			return Event{CtrlF, 0, nil}
+			return Event{keyfn('f'), 0, nil}
 		case tcell.KeyCtrlG:
-			return Event{CtrlG, 0, nil}
+			return Event{keyfn('g'), 0, nil}
+		case tcell.KeyCtrlH:
+			return Event{keyfn('h'), 0, nil}
+		case tcell.KeyCtrlI:
+			return Event{keyfn('i'), 0, nil}
 		case tcell.KeyCtrlJ:
-			return Event{CtrlJ, 0, nil}
+			return Event{keyfn('j'), 0, nil}
 		case tcell.KeyCtrlK:
-			return Event{CtrlK, 0, nil}
+			return Event{keyfn('k'), 0, nil}
 		case tcell.KeyCtrlL:
-			return Event{CtrlL, 0, nil}
+			return Event{keyfn('l'), 0, nil}
 		case tcell.KeyCtrlM:
-			if alt {
-				return Event{AltEnter, 0, nil}
-			}
-			return Event{CtrlM, 0, nil}
+			return Event{keyfn('m'), 0, nil}
 		case tcell.KeyCtrlN:
-			return Event{CtrlN, 0, nil}
+			return Event{keyfn('n'), 0, nil}
 		case tcell.KeyCtrlO:
-			return Event{CtrlO, 0, nil}
+			return Event{keyfn('o'), 0, nil}
 		case tcell.KeyCtrlP:
-			return Event{CtrlP, 0, nil}
+			return Event{keyfn('p'), 0, nil}
 		case tcell.KeyCtrlQ:
-			return Event{CtrlQ, 0, nil}
+			return Event{keyfn('q'), 0, nil}
 		case tcell.KeyCtrlR:
-			return Event{CtrlR, 0, nil}
+			return Event{keyfn('r'), 0, nil}
 		case tcell.KeyCtrlS:
-			return Event{CtrlS, 0, nil}
+			return Event{keyfn('s'), 0, nil}
 		case tcell.KeyCtrlT:
-			return Event{CtrlT, 0, nil}
+			return Event{keyfn('t'), 0, nil}
 		case tcell.KeyCtrlU:
-			return Event{CtrlU, 0, nil}
+			return Event{keyfn('u'), 0, nil}
 		case tcell.KeyCtrlV:
-			return Event{CtrlV, 0, nil}
+			return Event{keyfn('v'), 0, nil}
 		case tcell.KeyCtrlW:
-			return Event{CtrlW, 0, nil}
+			return Event{keyfn('w'), 0, nil}
 		case tcell.KeyCtrlX:
-			return Event{CtrlX, 0, nil}
+			return Event{keyfn('x'), 0, nil}
 		case tcell.KeyCtrlY:
-			return Event{CtrlY, 0, nil}
+			return Event{keyfn('y'), 0, nil}
 		case tcell.KeyCtrlZ:
-			return Event{CtrlZ, 0, nil}
-		case tcell.KeyBackspace, tcell.KeyBackspace2:
+			return Event{keyfn('z'), 0, nil}
+		case tcell.KeyCtrlSpace:
+			return Event{CtrlSpace, 0, nil}
+		case tcell.KeyBackspace2:
 			if alt {
 				return Event{AltBS, 0, nil}
 			}
@@ -310,8 +311,6 @@ func GetChar() Event {
 		case tcell.KeyPgDn:
 			return Event{PgDn, 0, nil}
 
-		case tcell.KeyTab:
-			return Event{Tab, 0, nil}
 		case tcell.KeyBacktab:
 			return Event{BTab, 0, nil}
 
@@ -368,99 +367,87 @@ func GetChar() Event {
 	return Event{Invalid, 0, nil}
 }
 
-func Pause() {
+func (r *FullscreenRenderer) Pause(bool) {
 	_screen.Fini()
 }
 
-func Resume() bool {
-	initScreen()
-	return true
+func (r *FullscreenRenderer) Resume(bool) {
+	r.initScreen()
 }
 
-func Close() {
+func (r *FullscreenRenderer) Close() {
 	_screen.Fini()
 }
 
-func RefreshWindows(windows []*Window) {
+func (r *FullscreenRenderer) RefreshWindows(windows []Window) {
 	// TODO
 	for _, w := range windows {
-		if w.win().MoveCursor {
-			_screen.ShowCursor(w.Left+w.win().LastX, w.Top+w.win().LastY)
-			w.win().MoveCursor = false
-		}
-		w.win().LastX = 0
-		w.win().LastY = 0
-		if w.win().Border {
-			w.DrawBorder()
-		}
+		w.Refresh()
 	}
 	_screen.Show()
 }
 
-func NewWindow(top int, left int, width int, height int, border bool) *Window {
+func (r *FullscreenRenderer) NewWindow(top int, left int, width int, height int, borderStyle BorderStyle) Window {
 	// TODO
-	win := new(WindowTcell)
-	win.Border = border
-	return &Window{
-		impl:   (*WindowImpl)(win),
-		Top:    top,
-		Left:   left,
-		Width:  width,
-		Height: height,
-	}
+	return &TcellWindow{
+		color:       r.theme != nil,
+		top:         top,
+		left:        left,
+		width:       width,
+		height:      height,
+		borderStyle: borderStyle}
 }
 
-func (w *Window) Close() {
+func (w *TcellWindow) Close() {
 	// TODO
 }
 
 func fill(x, y, w, h int, r rune) {
 	for ly := 0; ly <= h; ly++ {
 		for lx := 0; lx <= w; lx++ {
-			_screen.SetContent(x+lx, y+ly, r, nil, ColDefault.style())
+			_screen.SetContent(x+lx, y+ly, r, nil, ColNormal.style())
 		}
 	}
 }
 
-func (w *Window) Erase() {
-	// TODO
-	fill(w.Left, w.Top, w.Width, w.Height, ' ')
+func (w *TcellWindow) Erase() {
+	fill(w.left-1, w.top, w.width+1, w.height, ' ')
 }
 
-func (w *Window) Enclose(y int, x int) bool {
-	return x >= w.Left && x <= (w.Left+w.Width) &&
-		y >= w.Top && y <= (w.Top+w.Height)
+func (w *TcellWindow) Enclose(y int, x int) bool {
+	return x >= w.left && x < (w.left+w.width) &&
+		y >= w.top && y < (w.top+w.height)
 }
 
-func (w *Window) Move(y int, x int) {
-	w.win().LastX = x
-	w.win().LastY = y
-	w.win().MoveCursor = true
+func (w *TcellWindow) Move(y int, x int) {
+	w.lastX = x
+	w.lastY = y
+	w.moveCursor = true
 }
 
-func (w *Window) MoveAndClear(y int, x int) {
+func (w *TcellWindow) MoveAndClear(y int, x int) {
 	w.Move(y, x)
-	for i := w.win().LastX; i < w.Width; i++ {
-		_screen.SetContent(i+w.Left, w.win().LastY+w.Top, rune(' '), nil, ColDefault.style())
+	for i := w.lastX; i < w.width; i++ {
+		_screen.SetContent(i+w.left, w.lastY+w.top, rune(' '), nil, ColNormal.style())
 	}
-	w.win().LastX = x
+	w.lastX = x
 }
 
-func (w *Window) Print(text string) {
-	w.PrintString(text, ColDefault, 0)
+func (w *TcellWindow) Print(text string) {
+	w.printString(text, ColNormal, 0)
 }
 
-func (w *Window) PrintString(text string, pair ColorPair, a Attr) {
+func (w *TcellWindow) printString(text string, pair ColorPair, a Attr) {
 	t := text
 	lx := 0
 
 	var style tcell.Style
-	if _color {
+	if w.color {
 		style = pair.style().
 			Reverse(a&Attr(tcell.AttrReverse) != 0).
 			Underline(a&Attr(tcell.AttrUnderline) != 0)
 	} else {
-		style = ColDefault.style().
+		style = ColNormal.style().
 			Reverse(a&Attr(tcell.AttrReverse) != 0 || pair == ColCurrent || pair == ColCurrentMatch).
 			Underline(a&Attr(tcell.AttrUnderline) != 0 || pair == ColMatch || pair == ColCurrentMatch)
 	}
@@ -481,7 +468,7 @@ func (w *Window) PrintString(text string, pair ColorPair, a Attr) {
 		}
 
 		if r == '\n' {
-			w.win().LastY++
+			w.lastY++
 			lx = 0
 		} else {
 
@@ -489,29 +476,29 @@ func (w *Window) PrintString(text string, pair ColorPair, a Attr) {
 				continue
 			}
 
-			var xPos = w.Left + w.win().LastX + lx
-			var yPos = w.Top + w.win().LastY
-			if xPos < (w.Left+w.Width) && yPos < (w.Top+w.Height) {
+			var xPos = w.left + w.lastX + lx
+			var yPos = w.top + w.lastY
+			if xPos < (w.left+w.width) && yPos < (w.top+w.height) {
 				_screen.SetContent(xPos, yPos, r, nil, style)
 			}
 			lx += runewidth.RuneWidth(r)
 		}
 	}
-	w.win().LastX += lx
+	w.lastX += lx
 }
 
-func (w *Window) CPrint(pair ColorPair, a Attr, text string) {
-	w.PrintString(text, pair, a)
+func (w *TcellWindow) CPrint(pair ColorPair, attr Attr, text string) {
+	w.printString(text, pair, attr)
 }
 
-func (w *Window) FillString(text string, pair ColorPair, a Attr) bool {
+func (w *TcellWindow) fillString(text string, pair ColorPair, a Attr) FillReturn {
 	lx := 0
 
 	var style tcell.Style
-	if _color {
+	if w.color {
 		style = pair.style()
 	} else {
-		style = ColDefault.style()
+		style = ColNormal.style()
 	}
 	style = style.
 		Blink(a&Attr(tcell.AttrBlink) != 0).
@@ -522,53 +509,59 @@ func (w *Window) FillString(text string, pair ColorPair, a Attr) bool {
 
 	for _, r := range text {
 		if r == '\n' {
-			w.win().LastY++
-			w.win().LastX = 0
+			w.lastY++
+			w.lastX = 0
 			lx = 0
 		} else {
-			var xPos = w.Left + w.win().LastX + lx
+			var xPos = w.left + w.lastX + lx
 
 			// word wrap:
-			if xPos >= (w.Left + w.Width) {
-				w.win().LastY++
-				w.win().LastX = 0
+			if xPos >= (w.left + w.width) {
+				w.lastY++
+				w.lastX = 0
 				lx = 0
-				xPos = w.Left
+				xPos = w.left
 			}
-			var yPos = w.Top + w.win().LastY
+			var yPos = w.top + w.lastY
 
-			if yPos >= (w.Top + w.Height) {
-				return false
+			if yPos >= (w.top + w.height) {
+				return FillSuspend
 			}
 
 			_screen.SetContent(xPos, yPos, r, nil, style)
 			lx += runewidth.RuneWidth(r)
 		}
 	}
-	w.win().LastX += lx
+	w.lastX += lx
 
-	return true
+	return FillContinue
 }
 
-func (w *Window) Fill(str string) bool {
-	return w.FillString(str, ColDefault, 0)
+func (w *TcellWindow) Fill(str string) FillReturn {
+	return w.fillString(str, ColNormal, 0)
 }
 
-func (w *Window) CFill(str string, fg Color, bg Color, a Attr) bool {
-	return w.FillString(str, ColorPair{fg, bg}, a)
+func (w *TcellWindow) CFill(fg Color, bg Color, a Attr, str string) FillReturn {
+	if fg == colDefault {
+		fg = ColNormal.Fg()
+	}
+	if bg == colDefault {
+		bg = ColNormal.Bg()
+	}
+	return w.fillString(str, NewColorPair(fg, bg), a)
 }
 
-func (w *Window) DrawBorder() {
-	left := w.Left
-	right := left + w.Width
-	top := w.Top
-	bot := top + w.Height
+func (w *TcellWindow) drawBorder(around bool) {
+	left := w.left
+	right := left + w.width
+	top := w.top
+	bot := top + w.height
 
 	var style tcell.Style
-	if _color {
+	if w.color {
 		style = ColBorder.style()
 	} else {
-		style = ColDefault.style()
+		style = ColNormal.style()
 	}
 
 	for x := left; x < right; x++ {
@@ -576,13 +569,15 @@ func (w *Window) DrawBorder() {
 		_screen.SetContent(x, bot-1, tcell.RuneHLine, nil, style)
 	}
 
-	for y := top; y < bot; y++ {
-		_screen.SetContent(left, y, tcell.RuneVLine, nil, style)
-		_screen.SetContent(right-1, y, tcell.RuneVLine, nil, style)
-	}
+	if around {
+		for y := top; y < bot; y++ {
+			_screen.SetContent(left, y, tcell.RuneVLine, nil, style)
+			_screen.SetContent(right-1, y, tcell.RuneVLine, nil, style)
+		}
 
-	_screen.SetContent(left, top, tcell.RuneULCorner, nil, style)
-	_screen.SetContent(right-1, top, tcell.RuneURCorner, nil, style)
-	_screen.SetContent(left, bot-1, tcell.RuneLLCorner, nil, style)
-	_screen.SetContent(right-1, bot-1, tcell.RuneLRCorner, nil, style)
+		_screen.SetContent(left, top, tcell.RuneULCorner, nil, style)
+		_screen.SetContent(right-1, top, tcell.RuneURCorner, nil, style)
+		_screen.SetContent(left, bot-1, tcell.RuneLLCorner, nil, style)
+		_screen.SetContent(right-1, bot-1, tcell.RuneLRCorner, nil, style)
+	}
 }
