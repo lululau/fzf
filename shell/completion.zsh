@@ -31,11 +31,13 @@ fi
 ###########################################################
 
 __fzfcmd_complete() {
+  local FZF_HEIGHT=$([[ -n "$FZF_TMUX" && -n "$TMUX_PANE" ]] && echo ${FZF_TMUX_HEIGHT:-40%} || echo 100%)
   [ -n "$TMUX_PANE" ] && [ "${FZF_TMUX:-0}" != 0 ] && [ ${LINES:-40} -gt 15 ] &&
-    echo "fzf-tmux -d${FZF_TMUX_HEIGHT:-40%}" || echo "fzf"
+    echo "fzf-tmux -d${FZF_HEIGHT}" || echo "fzf"
 }
 
 __fzf_generic_path_completion() {
+  local FZF_HEIGHT=$([[ -n "$FZF_TMUX" && -n "$TMUX_PANE" ]] && echo ${FZF_TMUX_HEIGHT:-40%} || echo 100%)
   local base lbuf compgen fzf_opts suffix tail fzf dir leftover matches
   # (Q) flag removes a quoting level: "foo\ bar" => "foo bar"
   base=${(Q)1}
@@ -55,7 +57,7 @@ __fzf_generic_path_completion() {
       [ -z "$dir" ] && dir='.'
       [ "$dir" != "/" ] && dir="${dir/%\//}"
       dir=${~dir}
-      matches=$(eval "$compgen $(printf %q "$dir")" | FZF_DEFAULT_OPTS="--height ${FZF_TMUX_HEIGHT:-40%} --reverse $FZF_DEFAULT_OPTS $FZF_COMPLETION_OPTS" ${=fzf} ${=fzf_opts} -q "$leftover" | while read item; do
+      matches=$(eval "$compgen $(printf %q "$dir")" | FZF_DEFAULT_OPTS="--height ${FZF_HEIGHT} --reverse $FZF_DEFAULT_OPTS $FZF_COMPLETION_OPTS" ${=fzf} ${=fzf_opts} -q "$leftover" | while read item; do
         echo -n "${(q)item}$suffix "
       done)
       matches=${matches% }
@@ -88,6 +90,8 @@ _fzf_feed_fifo() (
 )
 
 _fzf_complete() {
+  local FZF_HEIGHT=$([[ -n "$FZF_TMUX" && -n "$TMUX_PANE" ]] && echo ${FZF_TMUX_HEIGHT:-40%} || echo 100%)
+
   local fifo fzf_opts lbuf fzf matches post
   fifo="${TMPDIR:-/tmp}/fzf-complete-fifo-$$"
   fzf_opts=$1
@@ -98,7 +102,7 @@ _fzf_complete() {
   fzf="$(__fzfcmd_complete)"
 
   _fzf_feed_fifo "$fifo"
-  matches=$(cat "$fifo" | FZF_DEFAULT_OPTS="--height ${FZF_TMUX_HEIGHT:-40%} --reverse $FZF_DEFAULT_OPTS $FZF_COMPLETION_OPTS" ${=fzf} ${=fzf_opts} -q "${(Q)prefix}" | $post | tr '\n' ' ')
+  matches=$(cat "$fifo" | FZF_DEFAULT_OPTS="--height ${FZF_HEIGHT} --reverse $FZF_DEFAULT_OPTS $FZF_COMPLETION_OPTS" ${=fzf} ${=fzf_opts} -q "${(Q)prefix}" | $post | tr '\n' ' ')
   if [ -n "$matches" ]; then
     LBUFFER="$lbuf$matches"
   fi
@@ -142,6 +146,8 @@ _fzf_complete_unalias() {
 }
 
 fzf-completion() {
+  local FZF_HEIGHT=$([[ -n "$FZF_TMUX" && -n "$TMUX_PANE" ]] && echo ${FZF_TMUX_HEIGHT:-40%} || echo 100%)
+
   local tokens cmd prefix trigger tail fzf matches lbuf d_cmds
   setopt localoptions noshwordsplit noksh_arrays noposixbuiltins
 
@@ -161,9 +167,9 @@ fzf-completion() {
 
   tail=${LBUFFER:$(( ${#LBUFFER} - ${#trigger} ))}
   # Kill completion (do not require trigger sequence)
-  if [ $cmd = kill -a ${LBUFFER[-1]} = ' ' ]; then
+  if [[ ( $cmd = kill || $cmd = k ) && ${LBUFFER[-1]} = ' ' ]]; then
     fzf="$(__fzfcmd_complete)"
-    matches=$(ps -ef | sed 1d | FZF_DEFAULT_OPTS="--height ${FZF_TMUX_HEIGHT:-50%} --min-height 15 --reverse $FZF_DEFAULT_OPTS --preview 'echo {}' --preview-window down:3:wrap $FZF_COMPLETION_OPTS" ${=fzf} -m | awk '{print $2}' | tr '\n' ' ')
+    matches=$(ps -ef | sed 1d | FZF_DEFAULT_OPTS="--height ${FZF_HEIGHT} --min-height 15 --reverse $FZF_DEFAULT_OPTS --preview 'echo {}' --preview-window down:3:wrap $FZF_COMPLETION_OPTS" ${=fzf} -m | awk '{print $2}' | tr '\n' ' ')
     if [ -n "$matches" ]; then
       LBUFFER="$LBUFFER$matches"
     fi
