@@ -95,8 +95,44 @@ fzf-cd-widget-1() {
     typeset -f zle-line-init >/dev/null && zle zle-line-init
     return $ret
 }
-zle     -N    fzf-cd-widget-1
-bindkey '\ec' fzf-cd-widget-1
+
+# ALT-C - cd into the selected directory(maxdepth=1)
+fzf-cd-widget-2() {
+    local FZF_HEIGHT=90%
+    setopt localoptions pipefail 2> /dev/null
+    local res="$({ gls -Atp --group-directories-first --color=no; [[ -z "$(ls -A | head -c 1)" ]] && echo ../ } | FZF_DEFAULT_OPTS="--height ${FZF_HEIGHT} $FZF_DEFAULT_OPTS $FZF_ALT_V_OPTS" fzf +m --header="$PWD" --bind 'enter:execute(echo)+accept,alt-enter:accept,alt-a:execute(echo cd ..)+accept,alt-p:execute(echo popd -q)+accept,alt-h:execute(echo cd __HOME_IN_FZF__)+accept')"
+    if [[ -z "$res" ]]; then
+        zle redisplay
+        return 0
+    fi
+
+    file="${res#$'\n'}"
+
+    if [[ "$res[1]" = $'\n' && -d "$file" ]]; then
+      cd "$file"
+    elif [[ "$res" = $'cd ..'* ]]; then
+      cd ..
+    elif [[ "$res" = $'cd __HOME_IN_FZF__'* ]]; then
+      cd ~
+    elif [[ "$res" = $'popd -q'* ]]; then
+      popd -q
+    else
+      LBUFFER="${LBUFFER}${(q)file}"
+      return 0
+    fi
+
+    local ret=$?
+    if [[ "$res[1]" = $'\n' || "$res" = $'cd ..\n'* || "$res" = $'popd -q\n'* || "$res" = $'cd __HOME_IN_FZF__'* ]]; then
+        fzf-cd-widget-2 false
+    fi
+    if [[ "$1" != false ]]; then
+      zle reset-prompt
+      typeset -f zle-line-init >/dev/null && zle zle-line-init
+    fi
+    return $ret
+}
+zle     -N    fzf-cd-widget-2
+bindkey '\ec' fzf-cd-widget-2
 
 # CTRL-R - Paste the selected command from history into the command line
 fzf-history-widget() {
