@@ -230,13 +230,21 @@ fzf-autojump-widget-1() {
 zle     -N   fzf-autojump-widget-1
 bindkey '\eJ' fzf-autojump-widget-1
 
-tmux-capture-pane-widget() {
+capture-term-contents-widget() {
     local FZF_HEIGHT=$([[ -n "$FZF_TMUX" && -n "$TMUX_PANE" ]] && echo ${FZF_TMUX_HEIGHT:-40%} || echo 100%)
-    LBUFFER="${LBUFFER}$(tmux capture-pane -pS - | perl -00 -pe 1 | FZF_DEFAULT_OPTS="--height ${FZF_HEIGHT} $FZF_DEFAULT_OPTS $FZF_ALT_O_OPTS" $(__fzfcmd) +m --tac | sed "s#^➜ *##;s#^#'#;s#\$#'#")"
+    if [ -n "$TMUX" ]; then
+      capture_cmd='tmux capture-pane -pS -'
+    elif [ $(uname) = Darwin ]; then
+      local contents=$(osascript -e "tell app \"iTerm\" to get contents of current session of current tab of current window")
+      capture_cmd='echo "$contents"'
+    else
+      capture_cmd='echo'
+    fi
+    LBUFFER="${LBUFFER}$(eval "$capture_cmd" | perl -00 -pe 1 | FZF_DEFAULT_OPTS="--height ${FZF_HEIGHT} $FZF_DEFAULT_OPTS $FZF_ALT_O_OPTS" $(__fzfcmd) +m --tac | sed "s#^➜ *##;s#^#'#;s#\$#'#")"
     zle redisplay
 }
-zle     -N   tmux-capture-pane-widget
-bindkey '\eo' tmux-capture-pane-widget
+zle     -N   capture-term-contents-widget
+bindkey '\eo' capture-term-contents-widget
 
 git-co-widget() {
     local FZF_HEIGHT=$([[ -n "$FZF_TMUX" && -n "$TMUX_PANE" ]] && echo ${FZF_TMUX_HEIGHT:-40%} || echo 100%)
