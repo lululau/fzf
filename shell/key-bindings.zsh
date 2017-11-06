@@ -32,7 +32,7 @@ __fsel_1() {
 }
 
 __fzf_use_tmux__() {
-  [ -n "$TMUX_PANE" ] && [ "${FZF_TMUX:-0}" != 0 ] && [ ${LINES:-40} -gt 15 ]
+    [ -n "$TMUX_PANE" ] && [ "${FZF_TMUX:-0}" != 0 ] && [ ${LINES:-40} -gt 15 ] && [[ $TMUX_VERSION_MAJOR -ge 2 ]]
 }
 
 __fzfcmd() {
