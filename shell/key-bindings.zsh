@@ -78,7 +78,7 @@ fzf-cd-widget() {
   return $ret
 }
 zle     -N    fzf-cd-widget
-bindkey '\ex' fzf-cd-widget
+bindkey '\eX' fzf-cd-widget
 
 # ALT-C - cd into the selected directory(maxdepth=1)
 fzf-cd-widget-1() {
