@@ -100,7 +100,7 @@ fzf-cd-widget-1() {
 fzf-cd-widget-2() {
     local FZF_HEIGHT=90%
     setopt localoptions pipefail 2> /dev/null
-    local res="$({ gls -Atp --group-directories-first --color=no; [[ -z "$(ls -A | head -c 1)" ]] && echo ../ } | FZF_DEFAULT_OPTS="--height ${FZF_HEIGHT} $FZF_DEFAULT_OPTS $FZF_ALT_V_OPTS" fzf +m --header="$PWD" --bind 'enter:execute(echo)+accept,alt-enter:accept,alt-a:execute(echo cd ..)+accept,alt-p:execute(echo popd -q)+accept,alt-h:execute(echo cd __HOME_IN_FZF__)+accept,alt-o:execute(echo cd -)+accept')"
+    local res="$({ gls -Atp --group-directories-first --color=no; [[ -z "$(ls -A | head -c 1)" ]] && echo ../ } | FZF_DEFAULT_OPTS="--height ${FZF_HEIGHT} $FZF_DEFAULT_OPTS $FZF_ALT_V_OPTS" fzf +m --header="$PWD" --bind 'enter:execute(echo)+accept,alt-enter:accept,alt-a:execute(echo cd ..)+accept,alt-p:execute(echo popd -q)+accept,alt-h:execute(echo cd __HOME_IN_FZF__)+accept,alt-o:execute(echo cd -)+accept,space:execute(echo exit)+accept')"
     if [[ -z "$res" ]]; then
         zle redisplay
         return 0
@@ -118,6 +118,8 @@ fzf-cd-widget-2() {
       popd -q
     elif [[ "$res" = $'cd -'* ]]; then
       cd -
+    elif [[ "$res" = $'exit\n'* ]]; then
+      cd "${res#$'exit\n'}"
     else
       LBUFFER="${LBUFFER}${(q)file}"
       return 0
