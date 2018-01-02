@@ -169,7 +169,7 @@ fzf-completion() {
   # Kill completion (do not require trigger sequence)
   if [[ ( $cmd = kill || $cmd = k ) && ${LBUFFER[-1]} = ' ' ]]; then
     fzf="$(__fzfcmd_complete)"
-    matches=$(ps -ef | sed 1d | FZF_DEFAULT_OPTS="--height ${FZF_HEIGHT} --min-height 15 --reverse $FZF_DEFAULT_OPTS --preview 'echo {}' --preview-window down:3:wrap $FZF_COMPLETION_OPTS" ${=fzf} -m | awk '{print $2}' | tr '\n' ' ')
+    matches=$(ps -ef | sed 1d | FZF_DEFAULT_OPTS="--height ${FZF_HEIGHT} --min-height 15 --reverse $FZF_DEFAULT_OPTS --preview 'echo {}' --preview-window down:3:wrap $FZF_COMPLETION_OPTS" ${=fzf} -m -e | awk '{print $2}' | tr '\n' ' ')
     if [ -n "$matches" ]; then
       LBUFFER="$LBUFFER$matches"
     fi
