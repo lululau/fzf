@@ -100,7 +100,7 @@ fzf-cd-widget-1() {
 fzf-cd-widget-2() {
     local FZF_HEIGHT=90%
     setopt localoptions pipefail 2> /dev/null
-    local res="$({ gls -Atp --group-directories-first --color=no; [[ -z "$(ls -A | head -c 1)" ]] && echo ../ } | FZF_DEFAULT_OPTS="--height ${FZF_HEIGHT} $FZF_DEFAULT_OPTS $FZF_ALT_V_OPTS" fzf +m --header="$PWD" --bind 'enter:execute(echo)+accept,alt-enter:accept,alt-a:execute(echo cd ..)+accept,alt-p:execute(echo popd -q)+accept,alt-h:execute(echo cd __HOME_IN_FZF__)+accept,alt-o:execute(echo cd -)+accept,space:execute(echo exit)+accept')"
+    local res="$({ gls -Atp --group-directories-first --color=no; [[ -z "$(ls -A | head -c 1)" ]] && echo ../ } | FZF_DEFAULT_OPTS="--height ${FZF_HEIGHT} $FZF_DEFAULT_OPTS $FZF_ALT_V_OPTS" fzf +m --header="$PWD" --bind 'enter:execute(echo)+accept,alt-enter:accept,alt-a:execute(echo cd ..)+accept,alt-p:execute(echo popd -q)+accept,alt-h:execute(echo cd __HOME_IN_FZF__)+accept,alt-/:execute(echo cd __ROOT_IN_FZF__)+accept,alt-o:execute(echo cd -)+accept,space:execute(echo exit)+accept')"
     if [[ -z "$res" ]]; then
         zle redisplay
         return 0
@@ -114,6 +114,8 @@ fzf-cd-widget-2() {
       cd ..
     elif [[ "$res" = $'cd __HOME_IN_FZF__'* ]]; then
       cd ~
+    elif [[ "$res" = $'cd __ROOT_IN_FZF__'* ]]; then
+      cd /
     elif [[ "$res" = $'popd -q'* ]]; then
       popd -q
     elif [[ "$res" = $'cd -'* ]]; then
@@ -126,7 +128,7 @@ fzf-cd-widget-2() {
     fi
 
     local ret=$?
-    if [[ "$res[1]" = $'\n' || "$res" = $'cd ..\n'* || "$res" = $'popd -q\n'* || "$res" = $'cd -\n'* || "$res" = $'cd __HOME_IN_FZF__'* ]]; then
+    if [[ "$res[1]" = $'\n' || "$res" = $'cd ..\n'* || "$res" = $'popd -q\n'* || "$res" = $'cd -\n'* || "$res" = $'cd __HOME_IN_FZF__'* || "$res" = $'cd __ROOT_IN_FZF__'* ]]; then
         fzf-cd-widget-2 false
     fi
     if [[ "$1" != false ]]; then
@@ -144,7 +146,7 @@ fzf-cd-widget-3() {
     local old_lbuffer=$LBUFFER
     local FZF_HEIGHT=90%
     setopt localoptions pipefail 2> /dev/null
-    local res="$({ gls -Atp --group-directories-first --color=no; [[ -z "$(ls -A | head -c 1)" ]] && echo ../ } | FZF_DEFAULT_OPTS="--height ${FZF_HEIGHT} $FZF_DEFAULT_OPTS $FZF_ALT_V_OPTS" fzf +m --header="$PWD" --bind 'enter:execute(echo)+accept,alt-enter:accept,alt-a:execute(echo cd ..)+accept,alt-p:execute(echo popd -q)+accept,alt-h:execute(echo cd __HOME_IN_FZF__)+accept,alt-o:execute(echo cd -)+accept')"
+    local res="$({ gls -Atp --group-directories-first --color=no; [[ -z "$(ls -A | head -c 1)" ]] && echo ../ } | FZF_DEFAULT_OPTS="--height ${FZF_HEIGHT} $FZF_DEFAULT_OPTS $FZF_ALT_V_OPTS" fzf +m --header="$PWD" --bind 'enter:execute(echo)+accept,alt-enter:accept,alt-a:execute(echo cd ..)+accept,alt-p:execute(echo popd -q)+accept,alt-h:execute(echo cd __HOME_IN_FZF__)+accept,alt-/:execute(echo cd __ROOT_IN_FZF__)+accept,alt-o:execute(echo cd -)+accept')"
     if [[ -z "$res" ]]; then
         zle redisplay
         return 0
@@ -158,6 +160,8 @@ fzf-cd-widget-3() {
       cd ..
     elif [[ "$res" = $'cd __HOME_IN_FZF__'* ]]; then
       cd ~
+    elif [[ "$res" = $'cd __ROOT_IN_FZF__'* ]]; then
+      cd /
     elif [[ "$res" = $'popd -q'* ]]; then
       popd -q
     elif [[ "$res" = $'cd -'* ]]; then
@@ -168,7 +172,7 @@ fzf-cd-widget-3() {
     fi
 
     local ret=$?
-    if [[ "$res[1]" = $'\n' || "$res" = $'cd ..\n'* || "$res" = $'popd -q\n'* || "$res" = $'cd -\n'* || "$res" = $'cd __HOME_IN_FZF__'* ]]; then
+    if [[ "$res[1]" = $'\n' || "$res" = $'cd ..\n'* || "$res" = $'popd -q\n'* || "$res" = $'cd -\n'* || "$res" = $'cd __HOME_IN_FZF__'* || "$res" = $'cd __ROOT_IN_FZF__'* ]]; then
         fzf-cd-widget-3 false
     fi
     if [[ "$1" != false ]]; then
