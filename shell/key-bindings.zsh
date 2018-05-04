@@ -213,7 +213,11 @@ bindkey '^R' fzf-history-widget
 fzf-autojump-widget() {
     local FZF_HEIGHT=$([[ -n "$FZF_TMUX" && -n "$TMUX_PANE" ]] && echo ${FZF_TMUX_HEIGHT:-40%} || echo 100%)
     setopt localoptions pipefail 2> /dev/null
-    local dir=$({ dirs -pl; autojump -s | sed -n '/^_______/!p; /^_______/q'  | cut -d$'\t' -f2; } | FZF_DEFAULT_OPTS="--height ${FZF_HEIGHT} $FZF_DEFAULT_OPTS $FZF_ALT_J_OPTS" $(__fzfcmd) +m)
+    local tac_cmd=tac
+    if [ $(uname) = Darwin ]; then
+      tac_cmd=gtac
+    fi
+    local dir=$({ dirs -pl; autojump -s | sed -n '/^_______/!p; /^_______/q'  | $tac_cmd | cut -d$'\t' -f2; } | FZF_DEFAULT_OPTS="--height ${FZF_HEIGHT} $FZF_DEFAULT_OPTS $FZF_ALT_J_OPTS" $(__fzfcmd) +m)
     if [[ -z "$dir" || ! -e "$dir" ]]; then
         zle redisplay
         return 0
@@ -230,7 +234,11 @@ bindkey '\ej' fzf-autojump-widget
 
 fzf-autojump-widget-1() {
     local FZF_HEIGHT=$([[ -n "$FZF_TMUX" && -n "$TMUX_PANE" ]] && echo ${FZF_TMUX_HEIGHT:-40%} || echo 100%)
-    LBUFFER="${LBUFFER}$({dirs -pl; autojump -s | sed -n '/^_______/!p; /^_______/q'  | cut -d$'\t' -f2; } | FZF_DEFAULT_OPTS="--height ${FZF_HEIGHT} $FZF_DEFAULT_OPTS $FZF_ALT_J_OPTS" $(__fzfcmd) +m | sed "s#^#'#;s#\$#'#")"
+    local tac_cmd=tac
+    if [ $(uname) = Darwin ]; then
+      tac_cmd=gtac
+    fi
+    LBUFFER="${LBUFFER}$({dirs -pl; autojump -s | sed -n '/^_______/!p; /^_______/q' | $tac_cmd  | cut -d$'\t' -f2; } | FZF_DEFAULT_OPTS="--height ${FZF_HEIGHT} $FZF_DEFAULT_OPTS $FZF_ALT_J_OPTS" $(__fzfcmd) +m | sed "s#^#'#;s#\$#'#")"
     zle redisplay
 }
 zle     -N   fzf-autojump-widget-1
