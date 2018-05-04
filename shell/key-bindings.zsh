@@ -55,6 +55,7 @@ fzf-file-widget-1() {
   local ret=$?
   zle redisplay
   typeset -f zle-line-init >/dev/null && zle zle-line-init
+  omz_termsupport_precmd
   return $ret
 }
 zle     -N   fzf-file-widget-1
@@ -75,6 +76,7 @@ fzf-cd-widget() {
   local ret=$?
   zle reset-prompt
   typeset -f zle-line-init >/dev/null && zle zle-line-init
+  omz_termsupport_precmd
   return $ret
 }
 zle     -N    fzf-cd-widget
@@ -93,6 +95,7 @@ fzf-cd-widget-1() {
     local ret=$?
     zle reset-prompt
     typeset -f zle-line-init >/dev/null && zle zle-line-init
+    omz_termsupport_precmd
     return $ret
 }
 
@@ -124,6 +127,7 @@ fzf-cd-widget-2() {
       cd "${res#$'exit\n'}"
     else
       LBUFFER="${LBUFFER}${(q)file}"
+      omz_termsupport_precmd
       return 0
     fi
 
@@ -135,6 +139,7 @@ fzf-cd-widget-2() {
       zle reset-prompt
       typeset -f zle-line-init >/dev/null && zle zle-line-init
     fi
+    omz_termsupport_precmd
     return $ret
 }
 zle     -N    fzf-cd-widget-2
@@ -226,6 +231,7 @@ fzf-autojump-widget() {
     local ret=$?
     zle reset-prompt
     typeset -f zle-line-init >/dev/null && zle zle-line-init
+    omz_termsupport_precmd
     return $ret
 }
 
