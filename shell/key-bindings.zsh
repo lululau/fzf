@@ -43,14 +43,16 @@ if [[ $- == *i* ]]; then
     local FZF_HEIGHT=$([[ -n "$FZF_TMUX" && -n "$TMUX_PANE" ]] && echo ${FZF_TMUX_HEIGHT:-40%} || echo 100%)
     local selected num
     setopt localoptions noglobsubst noposixbuiltins pipefail 2> /dev/null
-    selected=( $(fc -l 1 |
-                    FZF_DEFAULT_OPTS="--height ${FZF_HEIGHT} $FZF_DEFAULT_OPTS --tac -n2..,.. --tiebreak=index --bind=ctrl-r:toggle-sort $FZF_CTRL_R_OPTS --query=${(qqq)LBUFFER} +m" $(__fzfcmd)) )
+    selected=$(histdb --sep $'\t' |
+                    FZF_DEFAULT_OPTS="--height ${FZF_HEIGHT} $FZF_DEFAULT_OPTS --tac -n2..,.. --tiebreak=index --bind=ctrl-r:toggle-sort,alt-enter:execute(echo)+accept $FZF_CTRL_R_OPTS --query=${(qqq)LBUFFER} +m" $(__fzfcmd))
     local ret=$?
     if [ -n "$selected" ]; then
-        num=$selected[1]
-        if [ -n "$num" ]; then
-        zle vi-fetch-history -n $num
-        fi
+      if [ "$selected[1]" = $'\n' ]; then
+        cmd=$(echo -E "${selected:1}" | ruby -ne 'print "cd %s" % $_.split("\t", 4)[2].gsub(" ", "\\ ")')
+      else
+        cmd=$(echo -E "$selected" | ruby -ne 'print $_.split("\t", 4)[-1]' )
+      fi
+      LBUFFER=$cmd
     fi
     zle redisplay
     typeset -f zle-line-init >/dev/null && zle zle-line-init
