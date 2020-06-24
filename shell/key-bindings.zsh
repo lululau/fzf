@@ -43,11 +43,15 @@ if [[ $- == *i* ]]; then
     local FZF_HEIGHT=$([[ -n "$FZF_TMUX" && -n "$TMUX_PANE" ]] && echo ${FZF_TMUX_HEIGHT:-40%} || echo 100%)
     local selected num
     setopt localoptions noglobsubst noposixbuiltins pipefail 2> /dev/null
-    selected=$(histdb --sep $'\t' |
-                 FZF_DEFAULT_OPTS="--height ${FZF_HEIGHT} $FZF_DEFAULT_OPTS --tac -n2..,.. --tiebreak=index --bind=ctrl-r:toggle-sort,alt-enter:execute(echo)+accept $FZF_CTRL_R_OPTS --query=${(qqq)LBUFFER} +m" $(__fzfcmd))
+    local fzf_default_opts="--height ${FZF_HEIGHT} $FZF_DEFAULT_OPTS --tac -n2..,.. --tiebreak=index --bind=ctrl-r:toggle-sort,alt-enter:execute@echo@+accept $FZF_CTRL_R_OPTS +m"
+    if [ -n "$LBUFFER" ]; then
+      fzf_default_opts="$fzf_default_opts --query=\"\\'${LBUFFER// /\\\\ }\""
+    fi
+    selected=$(histdb --sep $'\t' | FZF_DEFAULT_OPTS="$fzf_default_opts" $(__fzfcmd))
     local ret=$?
     if [ -n "$selected" ]; then
       if [ "$selected[1]" = $'\n' ]; then
+        test -e /usr/bin/pbcopy && { echo -E "${selected:1}" | ruby -ne 'print $_.split("\t", 4)[-1].chomp' | pbcopy; }
         cmd=$(echo -E "${selected:1}" | ruby -ne 'print "cd %s" % $_.split("\t", 4)[2].gsub(" ", "\\ ")')
       else
         cmd=$(echo -E "$selected" | ruby -ne 'print $_.split("\t", 4)[-1]' )
